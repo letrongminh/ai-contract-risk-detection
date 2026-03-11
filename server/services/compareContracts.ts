@@ -1,10 +1,24 @@
 import { getGeminiClient } from './geminiClient.js';
-import { COMPARATOR_PROMPT } from '../prompts/index.js';
+import { buildComparatorPrompt } from '../prompts/index.js';
 import { comparisonSchema } from '../schemas/comparisonSchema.js';
+import {
+  getEnglishLeakageFields,
+  normalizeComparisonResult,
+} from './normalizeComparisonResult.js';
 
-export async function compareContracts(templateJson: any, submittedJson: any, contractTypeConfig: any) {
+async function requestComparisonResult({
+  templateJson,
+  submittedJson,
+  contractTypeConfig,
+  retryForVietnamese,
+}: {
+  templateJson: unknown;
+  submittedJson: unknown;
+  contractTypeConfig: Record<string, unknown>;
+  retryForVietnamese: boolean;
+}) {
   const ai = getGeminiClient();
-  
+
   const response = await ai.models.generateContent({
     model: 'gemini-3.1-pro-preview',
     contents: [
@@ -12,21 +26,62 @@ export async function compareContracts(templateJson: any, submittedJson: any, co
         role: 'user',
         parts: [
           {
-            text: `${COMPARATOR_PROMPT}\n\nContract Rules:\n${JSON.stringify(contractTypeConfig, null, 2)}\n\nOfficial Template JSON:\n${JSON.stringify(templateJson, null, 2)}\n\nSubmitted Contract JSON:\n${JSON.stringify(submittedJson, null, 2)}`
-          }
-        ]
-      }
+            text: buildComparatorPrompt({
+              contractTypeConfig,
+              templateJson,
+              submittedJson,
+              retryForVietnamese,
+            }),
+          },
+        ],
+      },
     ],
     config: {
       responseMimeType: 'application/json',
       responseSchema: comparisonSchema,
       temperature: 0.1,
-    }
+    },
   });
 
   if (!response.text) {
-    throw new Error('No text returned from Gemini');
+    throw new Error('Gemini không trả về nội dung phân tích.');
   }
 
   return JSON.parse(response.text);
+}
+
+export async function compareContracts(
+  templateJson: unknown,
+  submittedJson: unknown,
+  contractTypeConfig: Record<string, unknown>,
+) {
+  const initialResult = await requestComparisonResult({
+    templateJson,
+    submittedJson,
+    contractTypeConfig,
+    retryForVietnamese: false,
+  });
+  const normalizedInitialResult = normalizeComparisonResult(initialResult);
+  const initialLeakageFields = getEnglishLeakageFields(normalizedInitialResult);
+
+  if (!initialLeakageFields.length) {
+    return normalizedInitialResult;
+  }
+
+  const retriedResult = await requestComparisonResult({
+    templateJson,
+    submittedJson,
+    contractTypeConfig,
+    retryForVietnamese: true,
+  });
+  const normalizedRetriedResult = normalizeComparisonResult(retriedResult);
+  const retryLeakageFields = getEnglishLeakageFields(normalizedRetriedResult);
+
+  if (retryLeakageFields.length) {
+    throw new Error(
+      `Kết quả phân tích vẫn chứa tiếng Anh ở các trường: ${retryLeakageFields.join(', ')}.`,
+    );
+  }
+
+  return normalizedRetriedResult;
 }

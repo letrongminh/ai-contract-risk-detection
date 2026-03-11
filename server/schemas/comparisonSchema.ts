@@ -5,7 +5,7 @@ export const comparisonSchema = {
   properties: {
     overall_risk: {
       type: Type.STRING,
-      description: "Must be PASS, REVIEW, or FAIL"
+      description: 'Must be PASS, REVIEW, or FAIL',
     },
     recommended_action: { type: Type.STRING },
     overall_confidence: { type: Type.NUMBER },
@@ -19,10 +19,10 @@ export const comparisonSchema = {
         },
         issues: {
           type: Type.ARRAY,
-          items: { type: Type.STRING }
-        }
+          items: { type: Type.STRING },
+        },
       },
-      required: ["readability", "missing_pages", "issues"]
+      required: ['readability', 'missing_pages', 'issues'],
     },
     field_differences: {
       type: Type.ARRAY,
@@ -35,18 +35,30 @@ export const comparisonSchema = {
           change_type: { type: Type.STRING },
           risk: { type: Type.STRING },
           confidence: { type: Type.NUMBER },
-          reason: { type: Type.STRING }
+          reason: { type: Type.STRING },
+          recommendation: { type: Type.STRING },
+          page_refs_template: {
+            type: Type.ARRAY,
+            items: { type: Type.INTEGER },
+          },
+          page_refs_submitted: {
+            type: Type.ARRAY,
+            items: { type: Type.INTEGER },
+          },
         },
         required: [
-          "field_name",
-          "template_value",
-          "submitted_value",
-          "change_type",
-          "risk",
-          "confidence",
-          "reason"
-        ]
-      }
+          'field_name',
+          'template_value',
+          'submitted_value',
+          'change_type',
+          'risk',
+          'confidence',
+          'reason',
+          'recommendation',
+          'page_refs_template',
+          'page_refs_submitted',
+        ],
+      },
     },
     clause_differences: {
       type: Type.ARRAY,
@@ -62,39 +74,41 @@ export const comparisonSchema = {
           template_excerpt: { type: Type.STRING },
           submitted_excerpt: { type: Type.STRING },
           reason: { type: Type.STRING },
+          recommendation: { type: Type.STRING },
           page_refs_template: {
             type: Type.ARRAY,
-            items: { type: Type.INTEGER }
+            items: { type: Type.INTEGER },
           },
           page_refs_submitted: {
             type: Type.ARRAY,
-            items: { type: Type.INTEGER }
-          }
+            items: { type: Type.INTEGER },
+          },
         },
         required: [
-          "clause_id",
-          "title",
-          "change_type",
-          "risk",
-          "material_change",
-          "confidence",
-          "template_excerpt",
-          "submitted_excerpt",
-          "reason",
-          "page_refs_template",
-          "page_refs_submitted"
-        ]
-      }
+          'clause_id',
+          'title',
+          'change_type',
+          'risk',
+          'material_change',
+          'confidence',
+          'template_excerpt',
+          'submitted_excerpt',
+          'reason',
+          'recommendation',
+          'page_refs_template',
+          'page_refs_submitted',
+        ],
+      },
     },
-    summary: { type: Type.STRING }
+    summary: { type: Type.STRING },
   },
   required: [
-    "overall_risk",
-    "recommended_action",
-    "overall_confidence",
-    "document_quality",
-    "field_differences",
-    "clause_differences",
-    "summary"
-  ]
+    'overall_risk',
+    'recommended_action',
+    'overall_confidence',
+    'document_quality',
+    'field_differences',
+    'clause_differences',
+    'summary',
+  ],
 };

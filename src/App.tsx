@@ -1,8 +1,27 @@
-import { useState } from 'react';
-import { Upload, FileText, AlertCircle, CheckCircle, XCircle, FileWarning, ChevronDown, ChevronUp, Download, Check, AlertTriangle } from 'lucide-react';
-import { AnalysisResult } from './types';
-import { analyzeContracts } from './services/geminiService';
+import { useState, type ReactNode } from 'react';
+import {
+  AlertCircle,
+  AlertTriangle,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Download,
+  FileText,
+  Upload,
+  XCircle,
+} from 'lucide-react';
 import { diffWords } from 'diff';
+import { analyzeContracts } from './services/geminiService';
+import { cn } from './lib/utils';
+import {
+  buildFullReport,
+  formatConfidence,
+  formatPageRefs,
+  getRiskBadgeText,
+  getRiskTone,
+  getRiskValueLabel,
+} from './lib/analysisPresentation';
+import type { AnalysisResult } from './types';
 
 function DiffViewer({ oldText, newText }: { oldText: string; newText: string }) {
   const diff = diffWords(oldText, newText);
@@ -11,14 +30,90 @@ function DiffViewer({ oldText, newText }: { oldText: string; newText: string }) 
     <div className="font-mono text-sm whitespace-pre-wrap leading-relaxed">
       {diff.map((part, index) => {
         if (part.added) {
-          return <span key={index} className="bg-emerald-100 text-emerald-800 px-1 rounded font-semibold">[{part.value}]</span>;
+          return (
+            <span
+              key={index}
+              className="rounded bg-emerald-100 px-1 font-semibold text-emerald-900"
+            >
+              [{part.value}]
+            </span>
+          );
         }
+
         if (part.removed) {
-          return <span key={index} className="bg-red-100 text-red-800 px-1 rounded line-through opacity-70">[{part.value}]</span>;
+          return (
+            <span
+              key={index}
+              className="rounded bg-red-100 px-1 text-red-800 line-through opacity-80"
+            >
+              [{part.value}]
+            </span>
+          );
         }
-        return <span key={index} className="text-slate-700">{part.value}</span>;
+
+        return (
+          <span key={index} className="text-slate-700">
+            {part.value}
+          </span>
+        );
       })}
     </div>
+  );
+}
+
+function SectionCard({
+  id,
+  title,
+  subtitle,
+  children,
+}: {
+  id: string;
+  title: string;
+  subtitle: string;
+  children: ReactNode;
+}) {
+  return (
+    <section
+      id={id}
+      className="scroll-mt-36 rounded-[28px] border border-white/80 bg-white/90 p-6 shadow-[0_24px_70px_-32px_rgba(15,23,42,0.28)] backdrop-blur"
+    >
+      <div className="mb-5 flex flex-col gap-1">
+        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">{subtitle}</p>
+        <h3 className="font-serif text-2xl text-slate-950">{title}</h3>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function EmptyState({ message }: { message: string }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/80 p-6 text-sm leading-7 text-slate-600">
+      {message}
+    </div>
+  );
+}
+
+function getClauseKey(difference: AnalysisResult['clause_differences'][number], index: number) {
+  return `${difference.clause_id}-${index}`;
+}
+
+function getFieldKey(difference: AnalysisResult['field_differences'][number], index: number) {
+  return `${difference.field_name}-${index}`;
+}
+
+function buildInitialClauseState(result: AnalysisResult) {
+  return Object.fromEntries(
+    result.clause_differences.map((difference, index) => [
+      getClauseKey(difference, index),
+      difference.risk === 'FAIL',
+    ]),
+  );
+}
+
+function buildInitialFieldState(result: AnalysisResult) {
+  return Object.fromEntries(
+    result.field_differences.map((difference, index) => [getFieldKey(difference, index), false]),
   );
 }
 
@@ -29,15 +124,20 @@ export default function App() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [expandedClauses, setExpandedClauses] = useState<Record<number, boolean>>({});
+  const [expandedClauses, setExpandedClauses] = useState<Record<string, boolean>>({});
+  const [expandedFields, setExpandedFields] = useState<Record<string, boolean>>({});
 
-  const toggleClause = (idx: number) => {
-    setExpandedClauses(prev => ({ ...prev, [idx]: !prev[idx] }));
+  const toggleClause = (key: string) => {
+    setExpandedClauses((previousState) => ({ ...previousState, [key]: !previousState[key] }));
+  };
+
+  const toggleField = (key: string) => {
+    setExpandedFields((previousState) => ({ ...previousState, [key]: !previousState[key] }));
   };
 
   const handleAnalyze = async () => {
     if (!templateFile || !submittedFile) {
-      setError('Vui lòng tải lên cả hai tệp.');
+      setError('Vui lòng tải lên đầy đủ hợp đồng mẫu và hợp đồng khách gửi.');
       return;
     }
 
@@ -45,357 +145,822 @@ export default function App() {
     setError(null);
     setResult(null);
     setExpandedClauses({});
+    setExpandedFields({});
 
     try {
       const analysisResult = await analyzeContracts(templateFile, submittedFile, contractType);
       setResult(analysisResult);
-    } catch (err: any) {
-      console.error('Analysis error:', err);
-      setError(err.message || 'Đã xảy ra lỗi không xác định trong quá trình phân tích.');
+      setExpandedClauses(buildInitialClauseState(analysisResult));
+      setExpandedFields(buildInitialFieldState(analysisResult));
+    } catch (analysisError: any) {
+      console.error('Analysis error:', analysisError);
+      setError(analysisError.message || 'Đã xảy ra lỗi trong quá trình kiểm tra hợp đồng.');
     } finally {
       setIsAnalyzing(false);
     }
   };
 
+  const handleReset = () => {
+    setResult(null);
+    setError(null);
+    setExpandedClauses({});
+    setExpandedFields({});
+  };
+
   const handleDownloadJson = () => {
-    if (!result) return;
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(result, null, 2));
+    if (!result) {
+      return;
+    }
+
+    const dataStr = `data:text/json;charset=utf-8,${encodeURIComponent(JSON.stringify(result, null, 2))}`;
     const downloadAnchorNode = document.createElement('a');
-    downloadAnchorNode.setAttribute("href", dataStr);
-    downloadAnchorNode.setAttribute("download", "contract_risk_report.json");
+    downloadAnchorNode.setAttribute('href', dataStr);
+    downloadAnchorNode.setAttribute('download', 'bao_cao_rui_ro_hop_dong.json');
     document.body.appendChild(downloadAnchorNode);
     downloadAnchorNode.click();
     downloadAnchorNode.remove();
   };
 
-  const getRiskLabel = (risk: string) => {
-    switch (risk?.toUpperCase()) {
-      case 'PASS': return 'HỢP LỆ';
-      case 'REVIEW': return 'CẦN KIỂM TRA';
-      case 'FAIL': return 'NGHIÊM TRỌNG';
-      case 'CRITICAL': return 'NGHIÊM TRỌNG';
-      case 'LOW': return 'THẤP';
-      default: return risk?.toUpperCase() || 'KHÔNG XÁC ĐỊNH';
-    }
-  };
+  const criticalClauses =
+    result?.clause_differences
+      .map((difference, index) => ({ difference, index }))
+      .filter(({ difference }) => difference.risk === 'FAIL') || [];
+  const reviewClauses =
+    result?.clause_differences
+      .map((difference, index) => ({ difference, index }))
+      .filter(({ difference }) => difference.risk === 'REVIEW') || [];
+  const fieldDifferences = result?.field_differences || [];
+  const criticalCount =
+    criticalClauses.length +
+    fieldDifferences.filter((difference) => difference.risk === 'FAIL').length;
+  const reviewCount =
+    reviewClauses.length +
+    fieldDifferences.filter((difference) => difference.risk === 'REVIEW').length;
+  const documentIssueCount =
+    (result?.document_quality.issues.length || 0) +
+    (result?.document_quality.missing_pages.length || 0);
+  const fullReport = result ? buildFullReport(result) : '';
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans pb-20">
-      <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between sticky top-0 z-10">
-        <div className="flex items-center gap-2">
-          <FileText className="w-6 h-6 text-indigo-600" />
-          <h1 className="text-xl font-semibold tracking-tight">Hệ Thống Kiểm Tra Hợp Đồng AI</h1>
+    <div className="min-h-screen bg-transparent pb-16 text-slate-950">
+      <header className="sticky top-0 z-30 border-b border-white/70 bg-[rgba(247,243,236,0.88)] px-6 py-4 backdrop-blur">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-lg shadow-slate-900/15">
+              <FileText className="h-6 w-6" />
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.26em] text-slate-500">
+                Bảng điều khiển kiểm tra hợp đồng
+              </p>
+              <h1 className="font-serif text-2xl text-slate-950">Kiểm tra rủi ro hợp đồng</h1>
+            </div>
+          </div>
+          {result && (
+            <button
+              onClick={handleReset}
+              className="rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
+            >
+              Kiểm tra mới
+            </button>
+          )}
         </div>
       </header>
 
-      <main className="max-w-4xl mx-auto p-6 space-y-8 mt-4">
+      <main className="mx-auto flex max-w-6xl flex-col gap-8 px-6 py-8">
         {!result && !isAnalyzing && (
-          <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8">
-            <h2 className="text-2xl font-semibold mb-6">Bắt Đầu Kiểm Tra</h2>
-            
-            <div className="space-y-6">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">Loại Hợp Đồng</label>
-                <select 
-                  value={contractType}
-                  onChange={(e) => setContractType(e.target.value)}
-                  className="w-full max-w-xs border border-slate-300 rounded-lg px-3 py-2 bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                >
-                  <option value="SPA">Hợp đồng Mua bán (SPA)</option>
-                  <option value="DEPOSIT">Hợp đồng Đặt cọc</option>
-                </select>
-              </div>
+          <section className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+            <div className="rounded-[32px] border border-white/80 bg-white/88 p-8 shadow-[0_28px_80px_-36px_rgba(15,23,42,0.36)] backdrop-blur">
+              <p className="text-xs font-semibold uppercase tracking-[0.26em] text-slate-500">
+                Báo cáo tiếng Việt pháp lý
+              </p>
+              <h2 className="mt-3 max-w-2xl font-serif text-4xl leading-tight text-slate-950">
+                Đối chiếu hợp đồng mẫu và hợp đồng khách gửi bằng báo cáo kiểm tra nội bộ.
+              </h2>
+              <p className="mt-4 max-w-2xl text-base leading-8 text-slate-600">
+                Hệ thống hiển thị mức độ rủi ro, điều khoản bị sửa, sai lệch dữ liệu và chất
+                lượng tài liệu theo giao diện kiểm tra dành cho bộ phận pháp lý và vận hành.
+              </p>
 
-              <div className="grid md:grid-cols-2 gap-6">
-                <div className="border-2 border-dashed border-slate-300 rounded-xl p-6 flex flex-col items-center justify-center text-center hover:bg-slate-50 transition-colors">
-                  <Upload className="w-8 h-8 text-slate-400 mb-3" />
-                  <h3 className="font-medium mb-1">Hợp Đồng Mẫu</h3>
-                  <p className="text-sm text-slate-500 mb-4">Tải lên bản mẫu chính thức (PDF, JPG, PNG)</p>
-                  <input 
-                    type="file" 
-                    accept=".pdf,image/jpeg,image/png"
-                    onChange={(e) => setTemplateFile(e.target.files?.[0] || null)}
-                    className="text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer"
-                  />
-                  {templateFile && <p className="mt-2 text-sm text-emerald-600 font-medium">{templateFile.name}</p>}
+              <div className="mt-8 grid gap-4 md:grid-cols-3">
+                <div className="rounded-2xl border border-red-200 bg-red-50/80 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-red-600">
+                    FAIL
+                  </p>
+                  <p className="mt-2 text-sm leading-7 text-red-900">
+                    Phát hiện sai lệch nghiêm trọng cần chuyển bộ phận pháp lý kiểm tra.
+                  </p>
                 </div>
-
-                <div className="border-2 border-dashed border-slate-300 rounded-xl p-6 flex flex-col items-center justify-center text-center hover:bg-slate-50 transition-colors">
-                  <Upload className="w-8 h-8 text-slate-400 mb-3" />
-                  <h3 className="font-medium mb-1">Hợp Đồng Khách Gửi</h3>
-                  <p className="text-sm text-slate-500 mb-4">Tải lên bản khách hàng đã ký (PDF, JPG, PNG)</p>
-                  <input 
-                    type="file" 
-                    accept=".pdf,image/jpeg,image/png"
-                    onChange={(e) => setSubmittedFile(e.target.files?.[0] || null)}
-                    className="text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer"
-                  />
-                  {submittedFile && <p className="mt-2 text-sm text-emerald-600 font-medium">{submittedFile.name}</p>}
+                <div className="rounded-2xl border border-amber-200 bg-amber-50/80 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-700">
+                    REVIEW
+                  </p>
+                  <p className="mt-2 text-sm leading-7 text-amber-900">
+                    Có điểm cần kiểm tra thêm hoặc chưa đủ rõ để kết luận ngay.
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50/80 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-700">
+                    PASS
+                  </p>
+                  <p className="mt-2 text-sm leading-7 text-emerald-900">
+                    Không phát hiện sai lệch trọng yếu và có thể tiếp tục quy trình thông thường.
+                  </p>
                 </div>
               </div>
+            </div>
 
-              {error && (
-                <div className="bg-red-50 text-red-700 p-4 rounded-lg flex items-start gap-3">
-                  <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
-                  <p>{error}</p>
+            <section className="rounded-[32px] border border-slate-200/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(250,247,241,0.96))] p-8 shadow-[0_24px_70px_-34px_rgba(15,23,42,0.28)]">
+              <h3 className="font-serif text-2xl text-slate-950">Bắt đầu kiểm tra</h3>
+              <p className="mt-2 text-sm leading-7 text-slate-600">
+                Tải lên đúng cặp tài liệu để hệ thống trích xuất, đối chiếu và lập báo cáo bằng
+                tiếng Việt nghiệp vụ pháp lý.
+              </p>
+
+              <div className="mt-6 space-y-6">
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-700">Loại hợp đồng</label>
+                  <select
+                    value={contractType}
+                    onChange={(event) => setContractType(event.target.value)}
+                    className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none transition focus:border-slate-950"
+                  >
+                    <option value="SPA">Hợp đồng Mua bán (SPA)</option>
+                    <option value="DEPOSIT">Hợp đồng Đặt cọc</option>
+                  </select>
                 </div>
-              )}
 
-              <div className="flex justify-end">
+                <div className="space-y-4">
+                  <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50/70 p-5 text-center">
+                    <Upload className="mx-auto h-8 w-8 text-slate-400" />
+                    <h4 className="mt-3 font-medium text-slate-900">Hợp đồng mẫu</h4>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Bản mẫu chính thức dùng làm cơ sở đối chiếu.
+                    </p>
+                    <input
+                      type="file"
+                      accept=".pdf,image/jpeg,image/png"
+                      onChange={(event) => setTemplateFile(event.target.files?.[0] || null)}
+                      className="mt-4 block w-full text-sm text-slate-500 file:mr-4 file:rounded-full file:border-0 file:bg-slate-900 file:px-4 file:py-2 file:font-semibold file:text-white hover:file:bg-slate-800"
+                    />
+                    {templateFile && (
+                      <p className="mt-3 text-sm font-medium text-emerald-700">{templateFile.name}</p>
+                    )}
+                  </div>
+
+                  <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50/70 p-5 text-center">
+                    <Upload className="mx-auto h-8 w-8 text-slate-400" />
+                    <h4 className="mt-3 font-medium text-slate-900">Hợp đồng khách gửi</h4>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Bản khách hàng gửi lại để kiểm tra sai lệch và rủi ro.
+                    </p>
+                    <input
+                      type="file"
+                      accept=".pdf,image/jpeg,image/png"
+                      onChange={(event) => setSubmittedFile(event.target.files?.[0] || null)}
+                      className="mt-4 block w-full text-sm text-slate-500 file:mr-4 file:rounded-full file:border-0 file:bg-slate-900 file:px-4 file:py-2 file:font-semibold file:text-white hover:file:bg-slate-800"
+                    />
+                    {submittedFile && (
+                      <p className="mt-3 text-sm font-medium text-emerald-700">{submittedFile.name}</p>
+                    )}
+                  </div>
+                </div>
+
+                {error && (
+                  <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-red-800">
+                    <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+                    <p className="text-sm leading-7">{error}</p>
+                  </div>
+                )}
+
                 <button
                   onClick={handleAnalyze}
                   disabled={!templateFile || !submittedFile}
-                  className="bg-indigo-600 text-white px-6 py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  className="w-full rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-45"
                 >
-                  Phân Tích Hợp Đồng
+                  Phân tích hợp đồng
                 </button>
               </div>
-            </div>
+            </section>
           </section>
         )}
 
         {isAnalyzing && (
-          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-12 flex flex-col items-center justify-center text-center space-y-6">
-            <div className="w-16 h-16 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin"></div>
-            <div>
-              <h2 className="text-xl font-semibold mb-2">Đang phân tích hợp đồng...</h2>
-              <p className="text-slate-500">Trích xuất cấu trúc, so sánh điều khoản và phân loại rủi ro.</p>
-              <p className="text-sm text-slate-400 mt-2">Quá trình này có thể mất đến 2 phút.</p>
-            </div>
-          </div>
+          <section className="rounded-[32px] border border-white/80 bg-white/92 p-12 text-center shadow-[0_24px_70px_-34px_rgba(15,23,42,0.28)]">
+            <div className="mx-auto h-16 w-16 rounded-full border-4 border-slate-200 border-t-slate-950 animate-spin" />
+            <h2 className="mt-6 font-serif text-3xl text-slate-950">Đang kiểm tra hợp đồng</h2>
+            <p className="mt-3 text-base leading-8 text-slate-600">
+              Hệ thống đang trích xuất nội dung, đối chiếu điều khoản và lập báo cáo rủi ro.
+            </p>
+            <p className="mt-2 text-sm text-slate-400">Quá trình này có thể mất đến 2 phút.</p>
+          </section>
         )}
 
         {result && !isAnalyzing && (
-          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="flex items-center justify-between">
-              <h2 className="text-2xl font-semibold uppercase tracking-tight">Kết Quả Kiểm Tra Hợp Đồng</h2>
-              <button 
-                onClick={() => setResult(null)}
-                className="px-4 py-2 border border-slate-300 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors"
-              >
-                Kiểm tra mới
-              </button>
-            </div>
+          <>
+            <nav className="sticky top-[88px] z-20 flex flex-wrap gap-3 rounded-full border border-white/80 bg-[rgba(255,255,255,0.85)] px-4 py-3 shadow-[0_18px_50px_-30px_rgba(15,23,42,0.3)] backdrop-blur">
+              {[
+                ['summary', 'Tóm tắt'],
+                ['critical-changes', 'Sai lệch nghiêm trọng'],
+                ['review-needed', 'Cần kiểm tra thêm'],
+                ['field-differences', 'Sai lệch dữ liệu'],
+                ['document-quality', 'Chất lượng tài liệu'],
+                ['full-report', 'Báo cáo tổng hợp'],
+              ].map(([target, label]) => (
+                <a
+                  key={target}
+                  href={`#${target}`}
+                  className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-900 hover:text-white"
+                >
+                  {label}
+                </a>
+              ))}
+            </nav>
 
-            {/* Summary Card */}
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-              <div className={`p-6 border-b ${
-                result.overall_risk === 'PASS' ? 'bg-emerald-50 border-emerald-100' :
-                result.overall_risk === 'REVIEW' ? 'bg-amber-50 border-amber-100' :
-                'bg-red-50 border-red-100'
-              }`}>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  <div className="flex flex-col">
-                    <span className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-1">Mức độ rủi ro</span>
-                    <div className="flex items-center gap-2">
-                      {result.overall_risk === 'PASS' && <CheckCircle className="w-6 h-6 text-emerald-600" />}
-                      {result.overall_risk === 'REVIEW' && <FileWarning className="w-6 h-6 text-amber-600" />}
-                      {result.overall_risk === 'FAIL' && <XCircle className="w-6 h-6 text-red-600" />}
-                      <span className={`text-2xl font-bold ${
-                        result.overall_risk === 'PASS' ? 'text-emerald-700' :
-                        result.overall_risk === 'REVIEW' ? 'text-amber-700' :
-                        'text-red-700'
-                      }`}>
-                        {getRiskLabel(result.overall_risk)}
-                      </span>
+            <SectionCard id="summary" title="Kết quả kiểm tra hợp đồng" subtitle="Tổng quan">
+              <div
+                className={cn(
+                  'rounded-[28px] border p-6 shadow-inner shadow-white/50',
+                  getRiskTone(result.overall_risk).surface,
+                )}
+              >
+                <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+                  <div className="space-y-6">
+                    <div className="flex flex-wrap items-start gap-4">
+                      <div
+                        className={cn(
+                          'inline-flex rounded-full px-4 py-2 text-sm font-semibold',
+                          getRiskTone(result.overall_risk).accent,
+                        )}
+                      >
+                        {getRiskBadgeText(result.overall_risk)}
+                      </div>
+                      <div className="rounded-full border border-white/70 bg-white/80 px-4 py-2 text-sm font-medium text-slate-700">
+                        Độ tin cậy phân tích: {formatConfidence(result.overall_confidence)}
+                      </div>
+                    </div>
+
+                    <div className="grid gap-4 md:grid-cols-3">
+                      <div className="rounded-2xl border border-white/70 bg-white/85 p-4">
+                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                          Mức độ rủi ro
+                        </p>
+                        <p className="mt-2 text-xl font-semibold text-slate-950">
+                          {getRiskValueLabel(result.overall_risk)}
+                        </p>
+                      </div>
+                      <div className="rounded-2xl border border-white/70 bg-white/85 p-4">
+                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                          Sai lệch nghiêm trọng
+                        </p>
+                        <p className="mt-2 text-xl font-semibold text-slate-950">{criticalCount}</p>
+                      </div>
+                      <div className="rounded-2xl border border-white/70 bg-white/85 p-4">
+                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                          Cần kiểm tra thêm
+                        </p>
+                        <p className="mt-2 text-xl font-semibold text-slate-950">{reviewCount}</p>
+                      </div>
                     </div>
                   </div>
-                  <div className="flex flex-col">
-                    <span className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-1">Độ tin cậy phân tích</span>
-                    <span className="text-2xl font-bold text-slate-700">{Math.round(result.overall_confidence * 100)}%</span>
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-1">Khuyến nghị xử lý</span>
-                    <span className="text-base font-medium text-slate-900 leading-tight">{result.recommended_action}</span>
-                  </div>
-                </div>
-              </div>
-              <div className="p-6 bg-white">
-                <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">Tóm tắt phát hiện</h3>
-                <p className="text-slate-800 text-lg leading-relaxed whitespace-pre-wrap">{result.summary}</p>
-              </div>
-            </div>
 
-            {/* Issue Counts Summary */}
-            <div className="flex gap-4">
-              <div className="bg-red-50 border border-red-100 rounded-xl px-4 py-3 flex items-center gap-3">
-                <div className="bg-red-100 text-red-700 rounded-full w-8 h-8 flex items-center justify-center font-bold">
-                  {result.clause_differences.filter(d => d.risk?.toUpperCase() === 'CRITICAL' || d.risk?.toUpperCase() === 'FAIL').length + result.field_differences.filter(d => d.risk?.toUpperCase() === 'CRITICAL' || d.risk?.toUpperCase() === 'FAIL').length}
-                </div>
-                <span className="text-red-800 font-medium">Sai lệch nghiêm trọng</span>
-              </div>
-              <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 flex items-center gap-3">
-                <div className="bg-amber-100 text-amber-700 rounded-full w-8 h-8 flex items-center justify-center font-bold">
-                  {result.clause_differences.filter(d => d.risk?.toUpperCase() === 'REVIEW').length + result.field_differences.filter(d => d.risk?.toUpperCase() === 'REVIEW').length}
-                </div>
-                <span className="text-amber-800 font-medium">Sai lệch cần kiểm tra</span>
-              </div>
-            </div>
+                  <div className="rounded-[24px] border border-white/70 bg-white/90 p-5">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      Khuyến nghị xử lý
+                    </p>
+                    <p className="mt-3 text-base leading-8 text-slate-900">
+                      {result.recommended_action}
+                    </p>
 
-            {/* Clause Differences */}
-            {result.clause_differences.length > 0 && (
-              <div className="space-y-4">
-                <h3 className="text-xl font-semibold border-b border-slate-200 pb-2">Sai Lệch Điều Khoản</h3>
-                {result.clause_differences.map((diff, idx) => {
-                  const isExpanded = expandedClauses[idx] !== false; // Default to expanded
-                  const isCritical = diff.risk?.toUpperCase() === 'CRITICAL' || diff.risk?.toUpperCase() === 'FAIL';
-                  
-                  return (
-                    <div key={idx} className={`bg-white rounded-xl shadow-sm border overflow-hidden transition-all ${isCritical ? 'border-red-200' : 'border-amber-200'}`}>
-                      <div 
-                        className={`p-4 flex items-center justify-between cursor-pointer hover:bg-slate-50 ${isCritical ? 'bg-red-50/30' : 'bg-amber-50/30'}`}
-                        onClick={() => toggleClause(idx)}
-                      >
-                        <div className="flex items-center gap-3">
-                          {isCritical ? <XCircle className="w-5 h-5 text-red-500" /> : <FileWarning className="w-5 h-5 text-amber-500" />}
-                          <h4 className="font-semibold text-slate-900 text-lg">{diff.clause_id} – {diff.title}</h4>
-                        </div>
-                        <div className="flex items-center gap-4">
-                          <span className={`text-xs font-bold px-2.5 py-1 rounded-full uppercase tracking-wider ${
-                            isCritical ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
-                          }`}>
-                            {getRiskLabel(diff.risk)}
-                          </span>
-                          {isExpanded ? <ChevronUp className="w-5 h-5 text-slate-400" /> : <ChevronDown className="w-5 h-5 text-slate-400" />}
-                        </div>
+                    <div className="mt-6 flex flex-wrap gap-3">
+                      <div className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">
+                        {criticalCount} sai lệch nghiêm trọng
                       </div>
-                      
+                      <div className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">
+                        {reviewCount} sai lệch cần kiểm tra
+                      </div>
+                      <div className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">
+                        {fieldDifferences.length} sai lệch dữ liệu
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-6 rounded-[24px] border border-white/75 bg-white/92 p-5">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    Tóm tắt phát hiện
+                  </p>
+                  <p className="mt-3 whitespace-pre-wrap text-lg leading-9 text-slate-900">
+                    {result.summary}
+                  </p>
+                </div>
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              id="critical-changes"
+              title="Sai lệch nghiêm trọng"
+              subtitle="Sai lệch phát hiện"
+            >
+              <div className="space-y-4">
+                {criticalClauses.length === 0 && (
+                  <EmptyState message="Không phát hiện điều khoản nào ở mức nghiêm trọng." />
+                )}
+
+                {criticalClauses.map(({ difference, index }) => {
+                  const key = getClauseKey(difference, index);
+                  const isExpanded = expandedClauses[key] !== false;
+                  const tone = getRiskTone(difference.risk);
+
+                  return (
+                    <article
+                      key={key}
+                      className={cn(
+                        'overflow-hidden rounded-[24px] border bg-white shadow-[0_18px_55px_-35px_rgba(15,23,42,0.35)]',
+                        tone.surface,
+                      )}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => toggleClause(key)}
+                        className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left"
+                      >
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                            Điều khoản
+                          </p>
+                          <h4 className="mt-1 text-lg font-semibold text-slate-950">
+                            {difference.clause_id} – {difference.title}
+                          </h4>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span
+                            className={cn(
+                              'rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em]',
+                              tone.badge,
+                            )}
+                          >
+                            {getRiskValueLabel(difference.risk)}
+                          </span>
+                          {isExpanded ? (
+                            <ChevronUp className="h-5 w-5 text-slate-500" />
+                          ) : (
+                            <ChevronDown className="h-5 w-5 text-slate-500" />
+                          )}
+                        </div>
+                      </button>
+
                       {isExpanded && (
-                        <div className="p-5 border-t border-slate-100 space-y-6">
-                          <div>
-                            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1">Nhận định</span>
-                            <p className="text-slate-800 font-medium">{diff.reason}</p>
-                          </div>
-
-                          <div className="grid md:grid-cols-2 gap-6">
-                            <div>
-                              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-2">Hợp đồng mẫu</span>
-                              <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 text-sm text-slate-600 font-mono whitespace-pre-wrap h-full">
-                                {diff.template_excerpt}
-                              </div>
+                        <div className="space-y-6 border-t border-white/70 bg-white/88 px-5 py-5">
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                Loại sai lệch
+                              </p>
+                              <p className="mt-2 text-base text-slate-900">{difference.change_type}</p>
                             </div>
-                            <div>
-                              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-2">Hợp đồng khách gửi (Highlight thay đổi)</span>
-                              <div className="bg-white border border-slate-200 rounded-lg p-4 h-full">
-                                <DiffViewer oldText={diff.template_excerpt} newText={diff.submitted_excerpt} />
-                              </div>
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                Mức độ rủi ro
+                              </p>
+                              <p className="mt-2 text-base text-slate-900">
+                                {getRiskValueLabel(difference.risk)}
+                              </p>
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-2 text-sm text-slate-500">
-                            <FileText className="w-4 h-4" />
-                            <span>Trang liên quan: {diff.page_refs_submitted.join(', ')}</span>
+                          <div className="grid gap-5 lg:grid-cols-2">
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                Nội dung trong hợp đồng mẫu
+                              </p>
+                              <div className="mt-3 whitespace-pre-wrap font-mono text-sm leading-7 text-slate-700">
+                                {difference.template_excerpt || 'Không có dữ liệu trích dẫn.'}
+                              </div>
+                            </div>
+                            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                Nội dung trong hợp đồng khách gửi
+                              </p>
+                              <div className="mt-3">
+                                <DiffViewer
+                                  oldText={difference.template_excerpt}
+                                  newText={difference.submitted_excerpt}
+                                />
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                Nhận định
+                              </p>
+                              <p className="mt-2 text-base leading-8 text-slate-900">{difference.reason}</p>
+                            </div>
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                Khuyến nghị
+                              </p>
+                              <p className="mt-2 text-base leading-8 text-slate-900">
+                                {difference.recommendation}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                Trang hợp đồng mẫu
+                              </p>
+                              <p className="mt-2">Trang {formatPageRefs(difference.page_refs_template)}</p>
+                            </div>
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                Trang hợp đồng khách gửi
+                              </p>
+                              <p className="mt-2">Trang {formatPageRefs(difference.page_refs_submitted)}</p>
+                            </div>
                           </div>
                         </div>
                       )}
-                    </div>
+                    </article>
                   );
                 })}
               </div>
-            )}
+            </SectionCard>
 
-            {/* Field Differences */}
-            {result.field_differences.length > 0 && (
+            <SectionCard
+              id="review-needed"
+              title="Cần kiểm tra thêm"
+              subtitle="Cần đối chiếu"
+            >
               <div className="space-y-4">
-                <h3 className="text-xl font-semibold border-b border-slate-200 pb-2">Sai Lệch Dữ Liệu</h3>
-                <div className="grid md:grid-cols-2 gap-4">
-                  {result.field_differences.map((diff, idx) => {
-                    const isCritical = diff.risk?.toUpperCase() === 'CRITICAL' || diff.risk?.toUpperCase() === 'FAIL';
-                    return (
-                      <div key={idx} className={`bg-white rounded-xl shadow-sm border p-5 ${isCritical ? 'border-red-200' : 'border-amber-200'}`}>
-                        <div className="flex items-start justify-between mb-4">
-                          <h4 className="font-semibold text-slate-900 text-lg">Trường dữ liệu: {diff.field_name}</h4>
-                          <span className={`text-xs font-bold px-2.5 py-1 rounded-full uppercase tracking-wider ${
-                            isCritical ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
-                          }`}>
-                            {getRiskLabel(diff.risk)}
-                          </span>
-                        </div>
-                        
-                        <div className="space-y-3 mb-4">
-                          <div>
-                            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1">Hợp đồng mẫu</span>
-                            <p className="text-slate-600 font-mono text-sm">{diff.template_value || 'Không có'}</p>
-                          </div>
-                          <div>
-                            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1">Hợp đồng khách gửi</span>
-                            <p className="text-slate-900 font-mono font-medium text-sm">{diff.submitted_value || 'Không có'}</p>
-                          </div>
-                        </div>
+                {reviewClauses.length === 0 && (
+                  <EmptyState message="Không có điều khoản nào ở trạng thái cần kiểm tra thêm." />
+                )}
 
-                        <div className="pt-3 border-t border-slate-100">
-                          <p className="text-sm text-slate-700">{diff.reason}</p>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
+                {reviewClauses.map(({ difference, index }) => {
+                  const key = getClauseKey(difference, index);
+                  const isExpanded = expandedClauses[key] === true;
+                  const tone = getRiskTone(difference.risk);
 
-            {/* Document Quality */}
-            {(result.document_quality.issues.length > 0 || result.document_quality.missing_pages.length > 0) && (
-              <div className="space-y-4">
-                <h3 className="text-xl font-semibold border-b border-slate-200 pb-2">Chất Lượng Tài Liệu</h3>
-                <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-                  <div className="grid md:grid-cols-3 gap-6">
-                    <div>
-                      <span className="text-sm font-semibold text-slate-500 uppercase tracking-wider block mb-1">Khả năng đọc</span>
-                      <span className="text-lg font-medium text-slate-900">{result.document_quality.readability || 'Trung bình'}</span>
-                    </div>
-                    <div>
-                      <span className="text-sm font-semibold text-slate-500 uppercase tracking-wider block mb-1">Trang thiếu</span>
-                      <span className={`text-lg font-medium ${result.document_quality.missing_pages.length > 0 ? 'text-red-600' : 'text-slate-900'}`}>
-                        {result.document_quality.missing_pages.length > 0 ? result.document_quality.missing_pages.join(', ') : 'Không phát hiện'}
-                      </span>
-                    </div>
-                    <div className="md:col-span-3">
-                      <span className="text-sm font-semibold text-slate-500 uppercase tracking-wider block mb-2">Vấn đề phát hiện</span>
-                      {result.document_quality.issues.length > 0 ? (
-                        <ul className="space-y-2">
-                          {result.document_quality.issues.map((issue, idx) => (
-                            <li key={idx} className="text-slate-700 flex items-start gap-2">
-                              <span className="w-1.5 h-1.5 rounded-full bg-slate-400 mt-2 shrink-0"></span>
-                              {issue}
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p className="text-slate-600">Không có vấn đề nào được ghi nhận.</p>
+                  return (
+                    <article
+                      key={key}
+                      className={cn(
+                        'overflow-hidden rounded-[24px] border bg-white shadow-[0_18px_55px_-35px_rgba(15,23,42,0.35)]',
+                        tone.surface,
                       )}
-                    </div>
-                  </div>
+                    >
+                      <button
+                        type="button"
+                        onClick={() => toggleClause(key)}
+                        className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left"
+                      >
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                            Điều khoản
+                          </p>
+                          <h4 className="mt-1 text-lg font-semibold text-slate-950">
+                            {difference.clause_id} – {difference.title}
+                          </h4>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span
+                            className={cn(
+                              'rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em]',
+                              tone.badge,
+                            )}
+                          >
+                            {getRiskValueLabel(difference.risk)}
+                          </span>
+                          {isExpanded ? (
+                            <ChevronUp className="h-5 w-5 text-slate-500" />
+                          ) : (
+                            <ChevronDown className="h-5 w-5 text-slate-500" />
+                          )}
+                        </div>
+                      </button>
+
+                      {isExpanded && (
+                        <div className="space-y-6 border-t border-white/70 bg-white/88 px-5 py-5">
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                Loại sai lệch
+                              </p>
+                              <p className="mt-2 text-base text-slate-900">{difference.change_type}</p>
+                            </div>
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                Mức độ rủi ro
+                              </p>
+                              <p className="mt-2 text-base text-slate-900">
+                                {getRiskValueLabel(difference.risk)}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="grid gap-5 lg:grid-cols-2">
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                Nội dung trong hợp đồng mẫu
+                              </p>
+                              <div className="mt-3 whitespace-pre-wrap font-mono text-sm leading-7 text-slate-700">
+                                {difference.template_excerpt || 'Không có dữ liệu trích dẫn.'}
+                              </div>
+                            </div>
+                            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                Nội dung trong hợp đồng khách gửi
+                              </p>
+                              <div className="mt-3">
+                                <DiffViewer
+                                  oldText={difference.template_excerpt}
+                                  newText={difference.submitted_excerpt}
+                                />
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                Nhận định
+                              </p>
+                              <p className="mt-2 text-base leading-8 text-slate-900">{difference.reason}</p>
+                            </div>
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                Khuyến nghị
+                              </p>
+                              <p className="mt-2 text-base leading-8 text-slate-900">
+                                {difference.recommendation}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                Trang hợp đồng mẫu
+                              </p>
+                              <p className="mt-2">Trang {formatPageRefs(difference.page_refs_template)}</p>
+                            </div>
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                Trang hợp đồng khách gửi
+                              </p>
+                              <p className="mt-2">Trang {formatPageRefs(difference.page_refs_submitted)}</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              id="field-differences"
+              title="Sai lệch dữ liệu"
+              subtitle="Sai lệch dữ liệu"
+            >
+              <div className="space-y-4">
+                {fieldDifferences.length === 0 && (
+                  <EmptyState message="Không phát hiện sai lệch dữ liệu giữa hợp đồng mẫu và hợp đồng khách gửi." />
+                )}
+
+                {fieldDifferences.map((difference, index) => {
+                  const key = getFieldKey(difference, index);
+                  const isExpanded = expandedFields[key] === true;
+                  const tone = getRiskTone(difference.risk);
+
+                  return (
+                    <article
+                      key={key}
+                      className={cn(
+                        'overflow-hidden rounded-[24px] border bg-white shadow-[0_18px_55px_-35px_rgba(15,23,42,0.35)]',
+                        tone.surface,
+                      )}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => toggleField(key)}
+                        className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left"
+                      >
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                            Trường dữ liệu
+                          </p>
+                          <h4 className="mt-1 text-lg font-semibold text-slate-950">
+                            {difference.field_name}
+                          </h4>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span
+                            className={cn(
+                              'rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em]',
+                              tone.badge,
+                            )}
+                          >
+                            {getRiskValueLabel(difference.risk)}
+                          </span>
+                          {isExpanded ? (
+                            <ChevronUp className="h-5 w-5 text-slate-500" />
+                          ) : (
+                            <ChevronDown className="h-5 w-5 text-slate-500" />
+                          )}
+                        </div>
+                      </button>
+
+                      {isExpanded && (
+                        <div className="space-y-6 border-t border-white/70 bg-white/88 px-5 py-5">
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                Loại sai lệch
+                              </p>
+                              <p className="mt-2 text-base text-slate-900">{difference.change_type}</p>
+                            </div>
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                Mức độ rủi ro
+                              </p>
+                              <p className="mt-2 text-base text-slate-900">
+                                {getRiskValueLabel(difference.risk)}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="grid gap-5 md:grid-cols-2">
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                Hợp đồng mẫu
+                              </p>
+                              <p className="mt-3 font-mono text-sm leading-7 text-slate-700">
+                                {difference.template_value || 'Không có dữ liệu.'}
+                              </p>
+                            </div>
+                            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                Hợp đồng khách gửi
+                              </p>
+                              <p className="mt-3 font-mono text-sm leading-7 text-slate-900">
+                                {difference.submitted_value || 'Không có dữ liệu.'}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                Nhận định
+                              </p>
+                              <p className="mt-2 text-base leading-8 text-slate-900">{difference.reason}</p>
+                            </div>
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                Khuyến nghị
+                              </p>
+                              <p className="mt-2 text-base leading-8 text-slate-900">
+                                {difference.recommendation}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                Trang hợp đồng mẫu
+                              </p>
+                              <p className="mt-2">Trang {formatPageRefs(difference.page_refs_template)}</p>
+                            </div>
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                Trang hợp đồng khách gửi
+                              </p>
+                              <p className="mt-2">Trang {formatPageRefs(difference.page_refs_submitted)}</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              id="document-quality"
+              title="Chất lượng tài liệu"
+              subtitle="Chất lượng tài liệu"
+            >
+              <div className="grid gap-4 md:grid-cols-3">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    Khả năng đọc
+                  </p>
+                  <p className="mt-3 text-2xl font-semibold text-slate-950">
+                    {result.document_quality.readability}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    Trang thiếu
+                  </p>
+                  <p className="mt-3 text-2xl font-semibold text-slate-950">
+                    {result.document_quality.missing_pages.length
+                      ? formatPageRefs(result.document_quality.missing_pages)
+                      : 'Không phát hiện'}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    Số vấn đề phát hiện
+                  </p>
+                  <p className="mt-3 text-2xl font-semibold text-slate-950">{documentIssueCount}</p>
                 </div>
               </div>
-            )}
 
-            {/* Action Buttons */}
-            <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 p-4 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-20">
-              <div className="max-w-4xl mx-auto flex flex-wrap items-center justify-end gap-3">
-                <button className="flex items-center gap-2 px-4 py-2.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg font-medium hover:bg-emerald-100 transition-colors">
-                  <Check className="w-4 h-4" />
-                  Đánh dấu hợp lệ
-                </button>
-                <button className="flex items-center gap-2 px-4 py-2.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg font-medium hover:bg-amber-100 transition-colors">
-                  <AlertTriangle className="w-4 h-4" />
-                  Yêu cầu kiểm tra thêm
-                </button>
-                <button className="flex items-center gap-2 px-4 py-2.5 bg-red-50 text-red-700 border border-red-200 rounded-lg font-medium hover:bg-red-100 transition-colors">
-                  <XCircle className="w-4 h-4" />
-                  Chuyển bộ phận pháp lý
-                </button>
-                <div className="w-px h-8 bg-slate-200 mx-2"></div>
-                <button 
-                  onClick={handleDownloadJson}
-                  className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 text-white rounded-lg font-medium hover:bg-slate-800 transition-colors"
-                >
-                  <Download className="w-4 h-4" />
-                  Tải báo cáo JSON
-                </button>
+              <div className="mt-5 rounded-[24px] border border-slate-200 bg-white p-5">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Vấn đề phát hiện
+                </p>
+                {result.document_quality.issues.length > 0 ? (
+                  <div className="mt-4 space-y-3">
+                    {result.document_quality.issues.map((issue, index) => (
+                      <div
+                        key={`${issue}-${index}`}
+                        className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-7 text-slate-700"
+                      >
+                        {issue}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-4 text-sm leading-7 text-slate-600">
+                    Không phát hiện vấn đề chất lượng tài liệu cần lưu ý.
+                  </p>
+                )}
               </div>
-            </div>
+            </SectionCard>
 
-          </div>
+            <SectionCard id="full-report" title="Báo cáo tổng hợp" subtitle="Báo cáo nội bộ">
+              <div className="rounded-[24px] border border-slate-200 bg-[linear-gradient(180deg,#ffffff,#f8f6f1)] p-6">
+                <div className="mb-5 flex flex-wrap gap-3">
+                  <span
+                    className={cn(
+                      'rounded-full px-4 py-2 text-sm font-semibold',
+                      getRiskTone(result.overall_risk).accent,
+                    )}
+                  >
+                    {getRiskBadgeText(result.overall_risk)}
+                  </span>
+                  <span className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700">
+                    {formatConfidence(result.overall_confidence)} độ tin cậy
+                  </span>
+                </div>
+                <pre className="overflow-x-auto whitespace-pre-wrap font-serif text-base leading-8 text-slate-900">
+                  {fullReport}
+                </pre>
+              </div>
+            </SectionCard>
+
+            <section className="rounded-[28px] border border-white/80 bg-white/90 p-5 shadow-[0_22px_65px_-34px_rgba(15,23,42,0.28)] backdrop-blur">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
+                    Tác vụ
+                  </p>
+                  <h3 className="mt-1 font-serif text-2xl text-slate-950">Quyết định xử lý</h3>
+                </div>
+                <div className="flex flex-wrap gap-3">
+                  <button className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-medium text-emerald-800 transition hover:bg-emerald-100">
+                    <Check className="h-4 w-4" />
+                    Đánh dấu hợp đồng hợp lệ
+                  </button>
+                  <button className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-900 transition hover:bg-amber-100">
+                    <AlertTriangle className="h-4 w-4" />
+                    Yêu cầu kiểm tra thêm
+                  </button>
+                  <button className="inline-flex items-center gap-2 rounded-full border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-medium text-red-800 transition hover:bg-red-100">
+                    <XCircle className="h-4 w-4" />
+                    Chuyển bộ phận pháp lý
+                  </button>
+                  <button
+                    onClick={handleDownloadJson}
+                    className="inline-flex items-center gap-2 rounded-full bg-slate-950 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800"
+                  >
+                    <Download className="h-4 w-4" />
+                    Tải báo cáo JSON
+                  </button>
+                </div>
+              </div>
+            </section>
+          </>
         )}
       </main>
     </div>

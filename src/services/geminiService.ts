@@ -1,11 +1,11 @@
-import { AnalysisResponse, AnalysisResult } from '../types';
+import type { AnalysisResponse, AnalysisResult } from '../types';
 
 async function parseErrorMessage(response: Response): Promise<string> {
   try {
     const payload = (await response.json()) as AnalysisResponse;
-    return payload.error?.message || `Request failed with status ${response.status}`;
+    return payload.error?.message || `Yêu cầu thất bại với mã trạng thái ${response.status}`;
   } catch {
-    return `Request failed with status ${response.status}`;
+    return `Yêu cầu thất bại với mã trạng thái ${response.status}`;
   }
 }
 
@@ -31,7 +31,7 @@ export async function analyzeContracts(
   const payload = (await response.json()) as AnalysisResponse;
 
   if (!payload.result) {
-    throw new Error('Analysis response did not include a result.');
+    throw new Error('Phản hồi phân tích không chứa kết quả hợp lệ.');
   }
 
   return payload.result;

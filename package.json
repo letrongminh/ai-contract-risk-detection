@@ -11,6 +11,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
+    "test": "node --import tsx --test server/services/normalizeComparisonResult.test.ts",
     "lint": "tsc --noEmit",
     "start": "NODE_ENV=production tsx server.ts"
   },

@@ -18,8 +18,8 @@ router.post('/', upload.fields([
     res.status(400).json({
       error: {
         code: 'INVALID_INPUT',
-        message: 'Missing required files. Please upload both templateFile and submittedFile.'
-      }
+        message: 'Thiếu tệp bắt buộc. Vui lòng tải lên hợp đồng mẫu và hợp đồng khách gửi.',
+      },
     });
     return;
   }
@@ -55,8 +55,8 @@ router.post('/', upload.fields([
     res.status(500).json({
       error: {
         code: 'ANALYSIS_FAILED',
-        message: error.message || 'Could not complete contract analysis.'
-      }
+        message: error.message || 'Không thể hoàn tất quá trình kiểm tra hợp đồng.',
+      },
     });
   } finally {
     // Cleanup local files
