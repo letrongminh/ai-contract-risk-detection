@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build",
+    "gcp-build": "npm run build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "test": "node --import tsx --test server/services/normalizeComparisonResult.test.ts",
